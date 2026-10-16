@@ -140,18 +140,12 @@
   .hd-tg svg { display: block; }
   /* 音效关掉时图标变红 —— 一眼看出声音是关着的，不用去点它试 */
   .hd-tg.off, .hd-tg.off:hover { color: var(--red); }
-  /* ⚠️⚠️ 收起态（64px 窄条）：头部右边**横排放不下两个图标** —— 旁边还有「F」徽标，实测月亮会整个压在 F 上。
-     所以窄条里这样处理：
-       · 音效开关 → **收起**（窄条是悬停自动展开的，展开就能点，功能没丢）
-       · 亮/暗切换 → **竖着摞在徽标正下方**（不再压着 F），尺寸缩到 22px
-     ⚠️ 只改这几个**绝对定位**图标的位置/尺寸，**绝不碰任何盒模型** ——
-        侧栏条目在收起/展开两态必须逐像素一致，否则悬停展开时点击会落错按钮（见上面 .sidebar.expand 那段）。
-     📌 徽标是 `left:8px` / `30px` 宽（绝对坐标 16~46）→ 中心 31px，所以 20px 的图标放 `left:13px` 正好居中。
-     📌 纵向：徽标 16~46，头部下边框在 70 → 只剩 24px。用 20px 图标 + 上下各 2px 间隙 → `top:32px`（绝对 48~68）。 */
-  .sidebar:not(.expand) .hd-tools { top: 32px; right: auto; left: 13px; gap: 0; }
-  .sidebar:not(.expand) .hd-tools .hd-tg:not(.theme-tg) { display: none; }
-  .sidebar:not(.expand) .theme-tg { width: 20px; height: 20px; }
-  .sidebar:not(.expand) .theme-tg svg { width: 13px; height: 13px; }
+  /* ⚠️⚠️ 收起态（64px 窄条）：头部右边**横排放不下这两个图标** —— 旁边还有品牌徽标，实测会压上去。
+     牛牛 2026-10-16 定：**两个图标在收起时一律隐藏**，窄条里只留品牌徽标（干净）。
+     ⚠️ 不会丢功能：侧栏本来就是**悬停自动展开**的，鼠标移上去音效开关 + 亮/暗切换就都回来了。
+     ⚠️ 只隐藏这两个**绝对定位**的图标，**绝不碰任何盒模型** ——
+        侧栏条目在收起/展开两态必须逐像素一致，否则悬停展开时点击会落错按钮（见上面 .sidebar.expand 那段）。 */
+  .sidebar:not(.expand) .hd-tools { display: none; }
   /* 版本号（2026-10-15 牛牛选的「侧栏标题下方」）：标题底下一行小灰字，不抢视线但随时能瞄一眼 */
   .hd-ver { margin-top: 5px; font-size: 10.5px; line-height: 1.25; color: var(--muted);
             opacity: .7; letter-spacing: .2px; font-variant-numeric: tabular-nums; }
@@ -825,7 +819,7 @@
   //   纯本地单文件没法自己读到版本 → **只能写死在这里**，所以**每次发版必须手动同步这一行**。
   //   ⚠️ 漏改不会报错、只会显示旧版号 → 测试套件里有一条「APP_VER 必须等于 桌面版/app/version.json 的 version」
   //      专门盯它（见 测试_音效.js），别绕过。
-  var APP_VER = '2026.10.16.2';
+  var APP_VER = '2026.10.16.3';
   var LS_KEY = 'fanhub_rows_v2';
   var LS_DEV = 'fanhub_dev_order_v2';
   var LS_MAN = 'fanhub_dev_manual_v2';
