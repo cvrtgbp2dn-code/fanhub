@@ -1,0 +1,115 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>FanHub · 下载</title>
+<style>
+  * { box-sizing: border-box; margin: 0; padding: 0; }
+  :root {
+    --brand: #3b6ef0; --brand-d: #2f5bd0; --text: #1f2733; --muted: #8a94a6;
+    --line: #e6e8ec; --card: #f7f8fa; --green: #1d9e6c; --orange: #e8890c;
+  }
+  body { font-family: "Microsoft YaHei", "PingFang SC", system-ui, sans-serif; color: var(--text);
+         background: #fff; font-size: 15px; line-height: 1.7; }
+  .wrap { max-width: 760px; margin: 0 auto; padding: 56px 22px 80px; }
+  header { display: flex; align-items: center; gap: 20px; }
+  header img { width: 96px; height: 96px; flex-shrink: 0; }
+  h1 { font-size: 27px; font-weight: 700; letter-spacing: .5px; }
+  .sub { color: var(--muted); font-size: 14px; margin-top: 4px; }
+  .badge { display: inline-block; font-size: 12px; color: var(--green); background: #e5f6ef;
+           border-radius: 20px; padding: 2px 10px; margin-left: 8px; vertical-align: 3px; font-weight: 400; }
+  .dl { margin: 34px 0 10px; }
+  .btn { display: inline-flex; align-items: center; gap: 10px; background: var(--brand); color: #fff;
+         text-decoration: none; padding: 15px 30px; border-radius: 10px; font-size: 17px; font-weight: 700;
+         transition: .15s; box-shadow: 0 4px 14px rgba(59,110,240,.28); }
+  .btn:hover { background: var(--brand-d); }
+  .btn svg { flex-shrink: 0; }
+  .meta { color: var(--muted); font-size: 13px; margin-top: 12px; }
+  .meta b { color: var(--text); }
+  .card { background: var(--card); border: 1px solid var(--line); border-radius: 12px; padding: 20px 22px; margin-top: 28px; }
+  .card h3 { font-size: 15px; margin-bottom: 10px; }
+  ul { padding-left: 20px; }
+  li { margin: 3px 0; }
+  .tip { border-left: 3px solid var(--orange); background: #fdf8ef; border-radius: 0 8px 8px 0;
+         padding: 12px 16px; margin-top: 22px; font-size: 14px; }
+  .tip b { color: var(--orange); }
+  footer { margin-top: 44px; padding-top: 20px; border-top: 1px solid var(--line);
+           color: var(--muted); font-size: 12.5px; }
+  a.plain { color: var(--brand); }
+  code { background: #eef0f3; padding: 1px 6px; border-radius: 4px; font-size: 13px; }
+</style>
+</head>
+<body>
+<div class="wrap">
+
+  <header>
+    <img src="app/icon-512.png" alt="FanHub图标">
+    <div>
+      <h1>FanHub<span class="badge" id="verBadge">桌面版</span></h1>
+      <div class="sub">私域拉群进度管理 · 单机版 · 数据只存在你自己电脑上</div>
+    </div>
+  </header>
+
+  <div class="dl">
+    <a class="btn" id="dlBtn" href="https://github.com/cvrtgbp2dn-code/fanhub/releases/latest/download/FanHub-Setup.exe">
+      <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round"><path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"/><polyline points="7 10 12 15 17 10"/><line x1="12" y1="15" x2="12" y2="3"/></svg>
+      下载安装包（Windows 64 位）
+    </a>
+    <div class="meta">最新版本 <b id="verText">—</b> · 约 107 MB · 支持 Win10 / Win11
+      · 打不开就点<a class="plain" href="https://github.com/cvrtgbp2dn-code/fanhub/releases">这里</a></div>
+  </div>
+
+  <div class="tip">
+    <b>会自动更新</b>：以后工具升级，<b>不用重新下载安装包</b>。
+    程序每次启动会静默检查一次，有新版本自动换上（更新包只有 131 KB，秒完成）。
+  </div>
+
+  <div class="card">
+    <h3>这个软件能干什么</h3>
+    <ul>
+      <li>导入采集报表（.xls / .csv / .txt），自动按设备分组、按数据ID 去重</li>
+      <li>勾选 / 自下而上批量选中（个数可自己填）→ 填群名 → 标记已拉群 → 导出表格（已拉群 / 未分配分开导，真 .xlsx）</li>
+      <li><b>群组总览</b>：两个设备拼的同一个群，一屏看全，不用来回切设备</li>
+      <li>云端名单库检测：不在库的人自动打红标，不会误拉</li>
+      <li>数据备份 / 恢复：换电脑、重装都不丢数据</li>
+    </ul>
+  </div>
+
+  <div class="card">
+    <h3>安装说明</h3>
+    <ul>
+      <li>下载后双击安装，可以自己选安装位置</li>
+      <li>首次打开如果 Windows 弹出「已保护你的电脑」，点 <b>更多信息 → 仍要运行</b>
+          —— 这是因为个人开发者没买数字签名证书，不是病毒</li>
+      <li><b>首次启动需要联网一次</b>（拉最新程序），之后断网也能正常用</li>
+    </ul>
+  </div>
+
+  <div class="card">
+    <h3>数据在哪</h3>
+    <ul>
+      <li>全部数据存在<b>你自己电脑上</b>，不上传任何服务器</li>
+      <li>换电脑：在软件里点「数据备份 → 导出备份文件」，拷到新电脑再「恢复」即可</li>
+    </ul>
+  </div>
+
+  <footer>
+    所有版本：<a class="plain" href="https://github.com/cvrtgbp2dn-code/fanhub/releases">github.com/cvrtgbp2dn-code/fanhub/releases</a><br>
+    仅供内部使用。
+  </footer>
+</div>
+
+<script>
+  // 读当前版本号显示出来（读不到就显示 —，不影响下载）
+  fetch('app/version.json?t=' + Date.now())
+    .then(function (r) { return r.json(); })
+    .then(function (v) {
+      if (!v || !v.version) return;
+      document.getElementById('verText').textContent = v.version;
+      document.getElementById('verBadge').textContent = '最新 ' + v.version;
+    })
+    .catch(function () {});
+</script>
+</body>
+</html>
