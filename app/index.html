@@ -819,7 +819,7 @@
   //   纯本地单文件没法自己读到版本 → **只能写死在这里**，所以**每次发版必须手动同步这一行**。
   //   ⚠️ 漏改不会报错、只会显示旧版号 → 测试套件里有一条「APP_VER 必须等于 桌面版/app/version.json 的 version」
   //      专门盯它（见 测试_音效.js），别绕过。
-  var APP_VER = '2026.10.19.2';
+  var APP_VER = '2026.10.19.3';
   var LS_KEY = 'fanhub_rows_v2';
   var LS_DEV = 'fanhub_dev_order_v2';
   var LS_MAN = 'fanhub_dev_manual_v2';
@@ -869,6 +869,12 @@
   var LOAD_WARN = '';            // 数据读不出来时的提示文案（由 init 在 render 之后弹，见文件末尾）
   var SAVE_LOCK = false;         // 损坏且连备份都写不进去 → 拒绝保存，绝不覆盖原始串
   var SAVE_WARNED = false;       // save() 失败只提示一次，别每个操作都弹
+  // ---------- 多窗口保护（2026-10-19 新增）----------
+  // ⚠️ localStorage 没有跨窗口同步：两个窗口各拿一份内存，**后保存的会把前面那份整份覆盖**。
+  //    策略：一旦发现别的窗口写过数据 → 立刻提示 + **本窗口停止保存**（绝不覆盖别人的新数据），
+  //    用户点「刷新」重新加载后才恢复写入。
+  var STALE_LOCK = false;
+  var STALE_WARNED = false;
   // 群组视图那张表用哪个 key 记「已完成」折叠 / 表头全选 / 删除范围（见 cardPickable / del* 分支）
   var GRP_KEY = '__grp__';
   // 搜索【定位】用的查询词 —— 和上面的 searchQ（筛选）是**两回事**：
@@ -1021,6 +1027,7 @@
   function saveUsedIds() { try { localStorage.setItem(LS_USED, JSON.stringify(usedIds)); } catch (e) {} }
   function save() {
     if (SAVE_LOCK) return;        // 数据已损坏且备份写不进去 → 宁可不存，也不覆盖原始串
+    if (STALE_LOCK) return;       // 别的窗口已经写过数据 → 本窗口已过期，禁止覆盖（见下方的 storage 监听）
     try {
       localStorage.setItem(LS_KEY, JSON.stringify(rows));
       localStorage.setItem(LS_DEV, JSON.stringify(deviceOrder));
@@ -1028,6 +1035,7 @@
       saveUI();
       saveGrpOrder();
       saveUsedIds();
+      abkSchedule();               // 自动备份：改动后节流写一份快照（见下方「自动备份」）
     } catch (e) {
       // ⚠️ 2026-10-19：原来这里是空 catch —— 本地空间满 / 被禁用时**完全无感知**，
       //    用户以为存好了，重启才发现全丢。失败至少提示一次（不刷屏）。
@@ -1037,6 +1045,20 @@
       }
     }
   }
+  // ⚠️⚠️ 多窗口保护（2026-10-19）：别的窗口一写数据，本窗口立刻"过期"。
+  //    ⚠️ storage 事件**只会在*别的*窗口里触发**（自己写不会收到），所以不会误锁自己。
+  window.addEventListener('storage', function (e) {
+    if (!e || !e.key) return;
+    var k = e.key;
+    if (k.indexOf('_broken_') !== -1) return;          // 损坏数据的另存不影响
+    if (k !== LS_KEY && k !== LS_DEV && k !== LS_MAN && k !== LS_USED) return;
+    STALE_LOCK = true;
+    if (STALE_WARNED) return;                          // 只提示一次，别每次保存都弹
+    STALE_WARNED = true;
+    try {
+      toast('另一个窗口刚改过数据 —— 这里已停止保存，避免把它的覆盖掉', function () { location.reload(); }, 'block', '刷新');
+    } catch (e2) {}
+  });
   // ⚠️ 2026-10-15 老数据批次回填（牛牛选的「甲」方案）。返回 true = 这次真的补了（调用方要 save 一次）。
   //   更新前导入的数据没有 batch → 不补的话会被当成第 0 批、整坨按导入顺序沉在最下面。
   //   这里用 `date`（导入日期）当**粗略批次**：
@@ -1174,12 +1196,13 @@
     var b = $('toastUndo');
     if (b) { b.hidden = true; b.onclick = null; }
   }
-  function toast(msg, undoFn, kind) {
+  function toast(msg, undoFn, kind, undoText) {
     sfx(kind || sfxKindOf(msg));      // 音效（2026-10-15）：按消息类型配音；kind 可显式覆盖（'ok'/'block'/'done'）
     clearTimeout(toastTimer); toastTimer = null;
     $('toastMsg').textContent = msg;
     var b = $('toastUndo');
-    if (undoFn) { b.hidden = false; b.onclick = undoFn; } else { b.hidden = true; b.onclick = null; }
+    if (undoFn) { b.hidden = false; b.onclick = undoFn; b.textContent = undoText || '撤销'; }
+    else { b.hidden = true; b.onclick = null; }
     // ⚠️ 弹入动效要**每次都重播**：先撤掉 .show，强制重排，再挂回去 ——
     //    否则连着的两条提示里，第二条只会静默换字、不会再"弹"一下。
     //    ⚠️ 用 `void el.offsetWidth` 同步强制重排，**别用 rAF**（后台标签页会被节流，动画会卡在起点）。
@@ -1719,10 +1742,12 @@
     rows.forEach(function (r) { existIds[r.id] = true; });
     // ⚠️ 2026-10-15：**已归档**的数据ID 也要参与去重（**按设备**查）——
     //    否则导出时归档掉的数据，下次导入又会被当成新数据加回来。
-    var usedSet = {};
+    // ⚠️⚠️ 2026-10-19 牛牛定调（最终口径）：**归档过的也全局挡** ——
+    //   只要这个数据ID 在**任何一台设备**的归档名单里，任何设备都导不进来（同一个人只拉一次群）。
+    //   想让某台设备重做 → 「删除设备」会连带清掉它的归档名单，那时才解封（见 delDev）。
+    var usedAll = {};
     for (var udk in usedIds) {
-      usedSet[udk] = {};
-      usedIds[udk].forEach(function (x) { usedSet[udk][x] = true; });
+      usedIds[udk].forEach(function (x) { usedAll[x] = true; });
     }
     var today = todayStr();
     // ⚠️ 2026-10-14 新增：**上传批次号**（一份文档 = 一个批次）。
@@ -1739,8 +1764,8 @@
         else parsed = parseHtmlTable(text);
         parsed.forEach(function (p) {
           if (existIds[p.id]) { dup++; return; }
-          // 该设备**归档过**的 ID 同样跳过（口径和上面的 existIds 一致：精确匹配、按设备查）
-          if (usedSet[p.device] && usedSet[p.device][p.id]) { dup++; return; }
+          // **归档过**的 ID 同样跳过 —— 全局的（任何一台设备归档过都算）
+          if (usedAll[p.id]) { dup++; return; }
           existIds[p.id] = true;
           touched[p.device] = true;
           rows.push({ k: 'r' + (++uid), id: p.id, nick: p.nick, device: p.device, dtype: p.dtype, date: today, group: '', status: 'none', batch: myBatch });
@@ -1915,6 +1940,13 @@
     } else {
       body += '<p class="muted" style="margin-top:10px">本次不会触发归档。</p>';
     }
+    // ⚠️ 2026-10-19 牛牛定调：保存框点「取消」→ **不能**算已完成。
+    //    能不能分辨"取消"取决于浏览器：Chrome/Edge 走 showSaveFilePicker（能分辨），
+    //    其它环境退回 <a download>（分辨不了）→ 两种情况的说法必须不一样，不能骗人。
+    body += CAN_SEE_CANCEL
+      ? '<p class="muted" style="margin-top:10px">在保存框点了<b>取消</b>的话，这些数据<b>不会</b>被标记，可以放心重导。</p>'
+      : '<p class="muted" style="margin-top:10px">⚠️ 这个浏览器拿不到保存框的「取消」信号 —— ' +
+        '点了「导出」就会标记为「已完成」。要退回：到「已完成」区勾上它们，点「恢复」。</p>';
     openModal({
       title: '导出已拉群数据',
       bodyHtml: body,
@@ -1925,35 +1957,41 @@
   }
   function doExport(targets) {
     var blob = zipStore(buildXlsxParts(targets, { kind: 'launched' }));      // 真 .xlsx（OOXML）
-    downloadBlob(blob, '已拉群_' + stamp() + '.xlsx');
-    // ⚠️ 一起盖「完成时间」戳 doneAt（牛牛选的方案 F2）：
-    //    同一个批次用**同一个时间戳**，已完成区就能按"交单先后"倒序排 —— 同一次交单的算同一批。
-    var t = Date.now();
-    targets.forEach(function (r) { r.status = 'done'; r.doneAt = t; });
-    selected = {};
-    // ⚠️⚠️ 2026-10-19 修：改完状态**立刻落盘**，绝不能依赖 archiveDone 去顺带保存
-    //   （它没有可归档的行时会提前 return；那样导出看着成功、重开却全部回滚成「已拉群」）。
-    save();
-    var arc = archiveDone();          // 可能再移走一批更早的已完成（内部也会 save）；之后统一 render
-    render();
-    toast('已导出 ' + targets.length + ' 条「已拉群」数据，并全部标记为「已完成」' + arcNote(arc));
+    // ⚠️⚠️ 2026-10-19：**先等文件真正存下去，再改状态** —— 用户在保存框点「取消」时
+    //    不能把这些数据算成已完成（牛牛实测抓到）。saveBlob 返回 false = 点了取消。
+    saveBlob(blob, '已拉群_' + stamp() + '.xlsx').then(function (ok) {
+      if (!ok) { toast('已取消导出 —— 数据状态没有改动，可以重新导出'); return; }
+      // ⚠️ 一起盖「完成时间」戳 doneAt（牛牛选的方案 F2）：
+      //    同一个批次用**同一个时间戳**，已完成区就能按"交单先后"倒序排 —— 同一次交单的算同一批。
+      var t = Date.now();
+      targets.forEach(function (r) { r.status = 'done'; r.doneAt = t; });
+      selected = {};
+      // ⚠️⚠️ 2026-10-19 修：改完状态**立刻落盘**，绝不能依赖 archiveDone 去顺带保存
+      //   （它没有可归档的行时会提前 return；那样导出看着成功、重开却全部回滚成「已拉群」）。
+      save();
+      var arc = archiveDone();          // 可能再移走一批更早的已完成（内部也会 save）；之后统一 render
+      render();
+      toast('已导出 ' + targets.length + ' 条「已拉群」数据，并全部标记为「已完成」' + arcNote(arc));
+    });
   }
   // 导出「未分配」：**默认不动数据**；只有勾了弹窗里的「标记已完成」才改状态。
   // 标记时是 未分配 → 已完成（跳过「已分配」，群名保持空）——
   // ⚠️ 这个能撤回：之后在「已完成」里勾上点「恢复」，无群名的会退回「未分配」（restoreDone 本来就这么写）。
   function doExportNone(targets, markDone) {
     var blob = zipStore(buildXlsxParts(targets, { kind: 'unassigned' }));
-    downloadBlob(blob, '未分配数据_' + stamp() + '.xlsx');
-    var arc = { n: 0, groups: [] };
-    if (markDone) {
-      var t = Date.now();            // 同批次同一个「完成时间」戳（与 doExport 一致）
-      targets.forEach(function (r) { r.status = 'done'; r.doneAt = t; });
-      selected = {};
-      save();
-    }
-    arc = archiveDone();             // 两个导出都触发归档；内部会 save()
-    render();
-    toast('已导出 ' + targets.length + ' 条未分配数据' + (markDone ? '，并标记为「已完成」' : '') + arcNote(arc));
+    // 同 doExport：保存框点了「取消」→ 什么都不动（勾了「标记已完成」也不算数）
+    saveBlob(blob, '未分配数据_' + stamp() + '.xlsx').then(function (ok) {
+      if (!ok) { toast('已取消导出 —— 数据状态没有改动，可以重新导出'); return; }
+      if (markDone) {
+        var t = Date.now();            // 同批次同一个「完成时间」戳（与 doExport 一致）
+        targets.forEach(function (r) { r.status = 'done'; r.doneAt = t; });
+        selected = {};
+        save();
+      }
+      var arc = archiveDone();         // 两个导出都触发归档；内部会 save()
+      render();
+      toast('已导出 ' + targets.length + ' 条未分配数据' + (markDone ? '，并标记为「已完成」' : '') + arcNote(arc));
+    });
   }
   // 导出未分配前的确认弹窗：问「要不要顺手把这些未分配标成已完成」
   function askExportNone() {
@@ -2248,7 +2286,43 @@
     a.href = URL.createObjectURL(blob);
     a.download = fname;
     document.body.appendChild(a); a.click();
-    setTimeout(function () { URL.revokeObjectURL(a.href); a.remove(); }, 500);
+    setTimeout(function () { URL.revokeObjectURL(a.href); a.remove(); }, 60000);
+    // ⚠️ 原来是 500ms —— 网盘同步/杀毒扫描时可能还没读完就被撤销，下载会"下了一半"。给足一分钟。
+  }
+  // ⚠️⚠️ 2026-10-19 牛牛定调：**导出时在系统保存框点了「取消」，数据就不能算已完成**。
+  //    `<a download>` 这条路**拿不到任何回调**（保存框是浏览器的，取消了我们也不知道），
+  //    所以改用 File System Access 的 showSaveFilePicker —— 它返回 Promise，用户点取消时
+  //    会 reject 一个 AbortError，只有真正写成功才 resolve。**这是唯一能分辨"取消"的官方途径。**
+  //    不支持该 API 的浏览器（以及桌面版 Electron）→ 退回老办法（<a download>），行为不变。
+  var CAN_SEE_CANCEL = (typeof window.showSaveFilePicker === 'function');
+  // 返回 Promise<true=已保存 / false=用户取消>
+  function saveBlob(blob, fname) {
+    if (!CAN_SEE_CANCEL) { downloadBlob(blob, fname); return Promise.resolve(true); }
+    var opt = { suggestedName: fname };
+    if (/\.xlsx$/i.test(fname)) {
+      opt.types = [{ description: 'Excel 表格', accept: { 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet': ['.xlsx'] } }];
+    } else if (/\.json$/i.test(fname)) {
+      opt.types = [{ description: '备份文件', accept: { 'application/json': ['.json'] } }];
+    }
+    var p;
+    try { p = window.showSaveFilePicker(opt); }
+    catch (e) {
+      // 有些环境(如 file:// 的不透明源)会同步抛 SecurityError → 老实退回老办法
+      downloadBlob(blob, fname); return Promise.resolve(true);
+    }
+    return p.then(function (handle) {
+      return handle.createWritable().then(function (w) {
+        return w.write(blob).then(function () { return w.close(); });
+      }).then(function () { return true; });
+    }).catch(function (e) {
+      var n = (e && e.name) || '';
+      if (n === 'AbortError') return false;                       // ← 用户在保存框点了取消
+      // 环境不支持 / 被策略拦 / 权限被拒 → 退回老办法，别让用户导不出来
+      if (n === 'SecurityError' || n === 'NotAllowedError' || n === 'TypeError') {
+        downloadBlob(blob, fname); return true;
+      }
+      return false;
+    });
   }
 
   // ---------- 选中集合辅助 ----------
@@ -3141,9 +3215,13 @@
     }
     else if (field === 'id') {
       if (!val || val === row.id) return;
-      // ⚠️ 2026-10-19：查重**全局按 ID**（和导入去重口径一致）—— 别的设备有同一个ID 也算冲突
+      // ⚠️ 2026-10-19：查重**全局按 ID**（台账口径）—— 别的设备有同一个ID 也算冲突；
+      //    **归档过的也算**（否则手动改成一个已归档的 ID 又会把重复的人带回来）。
       var dup = false;
       rows.forEach(function (x) { if (x !== row && x.id === val) dup = true; });
+      if (!dup) {
+        for (var uk in usedIds) { if (usedIds[uk].indexOf(val) !== -1) { dup = true; break; } }
+      }
       if (dup) { toast('数据ID「' + val + '」已经有了，没改', null, 'block'); return; }
       row.id = val;
     }
@@ -3548,9 +3626,10 @@
     if (act === 'openDash') { mainView = 'dash'; render(); return; }
     if (act === 'dashGo') { dashGo2(t.getAttribute('data-k')); return; }
     // ---- 数据备份页：导出 / 选备份文件恢复 ----
-    if (act === 'openBackup') { mainView = 'backup'; render(); return; }
+    if (act === 'openBackup') { mainView = 'backup'; render(); abkFill(); return; }
     if (act === 'bkExport') { bkExport(); return; }
     if (act === 'bkPick') { var bf = $('backupFile'); if (bf) bf.click(); return; }
+    if (act === 'abkRestore') { abkRestore(Number(t.getAttribute('data-ts'))); return; }
     if (act === 'openManage') { mainView = 'manage'; render(); return; }
     if (act === 'openAddDev') { newDevVal = ''; mainView = 'addDev'; render(); return; }
     if (act === 'addDevOk') { addDevOk(); return; }
@@ -4243,6 +4322,101 @@
       }
     };
   }
+  // ---------- 自动备份（2026-10-19）----------
+  // 牛牛要求：**每次关闭软件时自动更新备份**。
+  // ⚠️ 只在关闭时写不可靠（页面卸载时 IDB 事务可能来不及）→ 两条腿：
+  //   ① save() 之后**节流 5 秒**写一份（停手就落盘）；② pagehide（关闭/刷新/切走）立刻再写一份。
+  // 存 IndexedDB 而不是 localStorage —— 一份完整数据存两遍会直接顶到 5MB。
+  // 只留最近 ABK_KEEP 份，旧的真删。
+  var ABK_DB = 'fanhub_autobk', ABK_STORE = 'snaps', ABK_KEEP = 5;
+  var abkDbP = null, abkTimer = null;
+  function abkOpen() {
+    if (abkDbP) return abkDbP;
+    abkDbP = new Promise(function (resolve, reject) {
+      if (!window.indexedDB) { reject(new Error('no idb')); return; }
+      var rq = indexedDB.open(ABK_DB, 1);
+      rq.onupgradeneeded = function () {
+        if (!rq.result.objectStoreNames.contains(ABK_STORE)) rq.result.createObjectStore(ABK_STORE, { keyPath: 'ts' });
+      };
+      rq.onsuccess = function () { resolve(rq.result); };
+      rq.onerror = function () { reject(rq.error || new Error('idb fail')); };
+    });
+    return abkDbP;
+  }
+  function abkPutNow() {
+    if (!window.indexedDB) return Promise.resolve(false);
+    if (STALE_LOCK) return Promise.resolve(false);   // 本窗口已过期 → 别把旧数据写成"最新一份"，否则恢复时会挑到它
+    return abkOpen().then(function (db) {
+      return new Promise(function (resolve) {
+        var tx = db.transaction(ABK_STORE, 'readwrite');
+        var st = tx.objectStore(ABK_STORE);
+        var snap = bkSnapshot();
+        snap.ts = Date.now();
+        st.put(snap);
+        var all = st.getAll();
+        all.onsuccess = function () {
+          var list = (all.result || []).slice().sort(function (a, b) { return b.ts - a.ts; });
+          list.slice(ABK_KEEP).forEach(function (x) { st.delete(x.ts); });
+        };
+        tx.oncomplete = function () { resolve(true); };
+        tx.onerror = function () { resolve(false); };
+        tx.onabort = function () { resolve(false); };
+      });
+    }).catch(function () { return false; });
+  }
+  function abkSchedule() {
+    if (abkTimer) clearTimeout(abkTimer);
+    abkTimer = setTimeout(function () { abkTimer = null; abkPutNow(); }, 5000);
+  }
+  // 关闭 / 刷新 / 切走页面时立刻补一份（尽力而为：IDB 事务在卸载时通常还能完成）
+  window.addEventListener('pagehide', function () { try { abkPutNow(); } catch (e) {} });
+  function abkAll() {
+    return abkOpen().then(function (db) {
+      return new Promise(function (resolve) {
+        var tx = db.transaction(ABK_STORE, 'readonly');
+        var rq = tx.objectStore(ABK_STORE).getAll();
+        rq.onsuccess = function () { resolve(rq.result || []); };
+        rq.onerror = function () { resolve([]); };
+      });
+    }).catch(function () { return []; });
+  }
+  function abkFill() {
+    var box = $('abkBox'); if (!box) return;
+    abkAll().then(function (list) {
+      var el = $('abkBox'); if (!el) return;      // 期间可能已经切走了
+      list = list.slice().sort(function (a, b) { return b.ts - a.ts; }).slice(0, 3);
+      if (!list.length) { el.innerHTML = '<span class="muted">还没有自动备份（用一会儿就会自动生成）。</span>'; return; }
+      var h = '';
+      list.forEach(function (s) {
+        var d = new Date(s.ts);
+        var when = (d.getMonth() + 1) + '/' + d.getDate() + ' ' + pad(d.getHours()) + ':' + pad(d.getMinutes()) + ':' + pad(d.getSeconds());
+        var n = ((s.data && s.data.rows) || []).length;
+        h += '<div style="display:flex;align-items:center;gap:12px;padding:7px 0;border-top:1px solid rgba(128,128,128,.18)">' +
+          '<span style="font-variant-numeric:tabular-nums">' + when + '</span>' +
+          '<span class="muted">' + n.toLocaleString() + ' 条</span>' +
+          '<button class="btn" data-act="abkRestore" data-ts="' + s.ts + '" ' +
+          'style="margin-left:auto;height:26px;padding:0 12px;font-size:12px">恢复</button></div>';
+      });
+      el.innerHTML = h;
+    });
+  }
+  function abkGet(ts) {
+    return abkOpen().then(function (db) {
+      return new Promise(function (resolve) {
+        var tx = db.transaction(ABK_STORE, 'readonly');
+        var rq = tx.objectStore(ABK_STORE).get(ts);
+        rq.onsuccess = function () { resolve(rq.result || null); };
+        rq.onerror = function () { resolve(null); };
+      });
+    }).catch(function () { return null; });
+  }
+  function abkRestore(ts) {
+    if (!ts) return;
+    abkGet(ts).then(function (snap) {
+      if (!snap || !snap.data || !Array.isArray(snap.data.rows)) { toast('这份自动备份已经找不到了'); abkFill(); return; }
+      askRestore(snap);
+    });
+  }
   function bkExport() {
     var blob = new Blob([JSON.stringify(bkSnapshot())], { type: 'application/json' });
     var d = new Date();
@@ -4265,6 +4439,10 @@
         '所以就算导错文件也不会丢东西。</p>' +
       '<div style="margin-top:14px"><button class="btn btn-ico" data-act="bkPick">' +
         ICON.imp + '<span>选择备份文件…</span></button></div>' +
+      '<div class="bk-sep"></div>' +
+      '<p class="muted"><b>自动备份</b>：每次操作后、以及关闭软件时会自动存一份（保留最近 5 份）。' +
+        '数据出了问题，从下面挑一份恢复：</p>' +
+      '<div id="abkBox" style="margin-top:8px"><span class="muted">读取中…</span></div>' +
       '</div></div></div>';
   }
   function onBackupFileChosen(files) {
@@ -4276,24 +4454,31 @@
       if (!snap || snap.kind !== 'backup' || !snap.data || !Array.isArray(snap.data.rows)) {
         toast('这个文件不是「FanHub」的备份'); return;
       }
-      var d = snap.data;
-      var n = (d.rows || []).length, dn = (d.deviceOrder || []).length;
-      var when = snap.at ? String(snap.at).replace('T', ' ').replace(/\..*$/, '') : '未知';
-      openModal({
-        title: '从备份恢复',
-        bodyHtml: '将用这个备份<b>替换掉当前的全部数据</b>。' +
-          '<div class="muted" style="margin-top:8px">备份内容：<b class="n">' + n.toLocaleString() +
-          '</b> 条数据 · <b class="n">' + dn + '</b> 个设备</div>' +
-          '<div class="muted">备份时间：' + esc(when) + '</div>' +
-          '<div class="warn-txt" style="margin-top:10px">恢复后 6 秒内可点提示条上的「撤销」退回。</div>',
-        okText: '恢复', okRed: true,
-        onOk: function () { doRestore(snap); }
-      });
+      askRestore(snap);
     };
     reader.readAsText(files[0], 'utf-8');
   }
+  // 恢复确认框（备份文件 / 自动备份 共用一套，口径必须一致）
+  function askRestore(snap) {
+    var d = snap.data;
+    var n = (d.rows || []).length, dn = (d.deviceOrder || []).length;
+    var when = snap.at ? String(snap.at).replace('T', ' ').replace(/\..*$/, '') : '未知';
+    openModal({
+      title: '从备份恢复',
+      bodyHtml: '将用这个备份<b>替换掉当前的全部数据</b>。' +
+        '<div class="muted" style="margin-top:8px">备份内容：<b class="n">' + n.toLocaleString() +
+        '</b> 条数据 · <b class="n">' + dn + '</b> 个设备</div>' +
+        '<div class="muted">备份时间：' + esc(when) + '</div>' +
+        '<div class="warn-txt" style="margin-top:10px">恢复后 6 秒内可点提示条上的「撤销」退回。</div>',
+      okText: '恢复', okRed: true,
+      onOk: function () { doRestore(snap); }
+    });
+  }
   function doRestore(snap) {
     var before = bkSnapshot();          // 先把当前数据整份留下来，供撤销
+    // ⚠️ 用户**明确点了「恢复」** = 就是要用这份数据替换现在的一切 →
+    //    先把多窗口的"过期锁"解开，否则 save() 会静默不写，恢复看起来成功、刷新后全回来。
+    STALE_LOCK = false; STALE_WARNED = false;
     var d = snap.data;
     rows = d.rows || [];
     deviceOrder = d.deviceOrder || [];
