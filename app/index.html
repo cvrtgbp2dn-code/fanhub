@@ -819,7 +819,7 @@
   //   纯本地单文件没法自己读到版本 → **只能写死在这里**，所以**每次发版必须手动同步这一行**。
   //   ⚠️ 漏改不会报错、只会显示旧版号 → 测试套件里有一条「APP_VER 必须等于 桌面版/app/version.json 的 version」
   //      专门盯它（见 测试_音效.js），别绕过。
-  var APP_VER = '2026.10.19.1';
+  var APP_VER = '2026.10.19.2';
   var LS_KEY = 'fanhub_rows_v2';
   var LS_DEV = 'fanhub_dev_order_v2';
   var LS_MAN = 'fanhub_dev_manual_v2';
@@ -863,6 +863,12 @@
   var grpListDoneOpen = false;   // 里面「已完成群组 (N)」那一节是否展开（默认折叠）
   var grpOrder = [];             // 群名**第一次被填写的先后**（侧栏列表 & 导出都按它排）
   var usedIds = {};              // 设备名 -> [已归档的数据ID]（见 LS_USED）—— 只用于导入去重
+  // ---------- 数据安全（2026-10-19 新增）----------
+  // ⚠️ load() 读不出来时**绝不能静默清空**：原来 catch 里直接把 rows 清空，
+  //    界面显示 0 条，用户随便点一下触发 save() 就把空数组写回去 → 原始数据永久丢失。
+  var LOAD_WARN = '';            // 数据读不出来时的提示文案（由 init 在 render 之后弹，见文件末尾）
+  var SAVE_LOCK = false;         // 损坏且连备份都写不进去 → 拒绝保存，绝不覆盖原始串
+  var SAVE_WARNED = false;       // save() 失败只提示一次，别每个操作都弹
   // 群组视图那张表用哪个 key 记「已完成」折叠 / 表头全选 / 删除范围（见 cardPickable / del* 分支）
   var GRP_KEY = '__grp__';
   // 搜索【定位】用的查询词 —— 和上面的 searchQ（筛选）是**两回事**：
@@ -1014,6 +1020,7 @@
   // 归档 ID 名单单独存（同上：小，且写入时机和 rows 不同 —— 改群名并不改它）
   function saveUsedIds() { try { localStorage.setItem(LS_USED, JSON.stringify(usedIds)); } catch (e) {} }
   function save() {
+    if (SAVE_LOCK) return;        // 数据已损坏且备份写不进去 → 宁可不存，也不覆盖原始串
     try {
       localStorage.setItem(LS_KEY, JSON.stringify(rows));
       localStorage.setItem(LS_DEV, JSON.stringify(deviceOrder));
@@ -1021,7 +1028,14 @@
       saveUI();
       saveGrpOrder();
       saveUsedIds();
-    } catch (e) {}
+    } catch (e) {
+      // ⚠️ 2026-10-19：原来这里是空 catch —— 本地空间满 / 被禁用时**完全无感知**，
+      //    用户以为存好了，重启才发现全丢。失败至少提示一次（不刷屏）。
+      if (!SAVE_WARNED) {
+        SAVE_WARNED = true;
+        try { toast('保存失败：本地存储可能已满，请先「导出备份」再清理一些已完成数据', null, 'block'); } catch (e2) {}
+      }
+    }
   }
   // ⚠️ 2026-10-15 老数据批次回填（牛牛选的「甲」方案）。返回 true = 这次真的补了（调用方要 save 一次）。
   //   更新前导入的数据没有 batch → 不补的话会被当成第 0 批、整坨按导入顺序沉在最下面。
@@ -1056,20 +1070,42 @@
     return out;
   }
   function load() {
-    try {
-      var raw = localStorage.getItem(LS_KEY);
-      if (raw) rows = JSON.parse(raw) || [];
-      var dv = localStorage.getItem(LS_DEV);
-      if (dv) deviceOrder = JSON.parse(dv) || [];
-      var dm = localStorage.getItem(LS_MAN);
-      if (dm) devManual = JSON.parse(dm) || {};
-      var ui = localStorage.getItem(LS_UI);
-      if (ui) { var u = JSON.parse(ui) || {}; doneCollapsed = u.doneCollapsed || {}; devListCollapsed = !!u.devListCollapsed; sidebarPinned = !!u.sidebarPinned; THEME = (u.theme === 'dark') ? 'dark' : 'light'; SOUND = (u.sound !== false); }
-      var go = localStorage.getItem(LS_GRP);
-      if (go) { var gg = JSON.parse(go); if (Object.prototype.toString.call(gg) === '[object Array]') grpOrder = gg.filter(function (x) { return typeof x === 'string'; }); }
-      var us = localStorage.getItem(LS_USED);
-      if (us) usedIds = normalizeUsedIds(JSON.parse(us));
-    } catch (e) { rows = []; deviceOrder = []; devManual = {}; }
+    // ⚠️ 2026-10-19 改：**每个键各自容错**。
+    //   原来是"一个大 try 包住全部"，任何一个键坏掉（比如只坏了个 ui）就会把 rows 一起清空。
+    function readJson(key) {
+      try { var v = localStorage.getItem(key); return v ? JSON.parse(v) : undefined; }
+      catch (e) { return undefined; }
+    }
+    // ⚠️⚠️ rows 单独处理：解析失败**不能静默清空** ——
+    //   先把原始串另存一份（`<键名>_broken_<时间戳>`），用户还能靠它找回；
+    //   连备份都写不进去（空间满）时才 SAVE_LOCK，宁可不让改也不覆盖。
+    var rawRows = null;
+    try { rawRows = localStorage.getItem(LS_KEY); } catch (e) {}
+    if (rawRows) {
+      try {
+        rows = JSON.parse(rawRows) || [];
+      } catch (e) {
+        var kept = false;
+        try { localStorage.setItem(LS_KEY + '_broken_' + Date.now(), rawRows); kept = true; } catch (e2) {}
+        rows = [];
+        if (kept) {
+          LOAD_WARN = '上次的数据读不出来，原始数据已经另存了一份（不会丢），现在先显示为空';
+        } else {
+          SAVE_LOCK = true;
+          LOAD_WARN = '上次的数据读不出来，备份也写不进去 —— 已暂停保存，避免把它覆盖掉';
+        }
+      }
+    }
+    var dv = readJson(LS_DEV);
+    if (Object.prototype.toString.call(dv) === '[object Array]') deviceOrder = dv;
+    var dm = readJson(LS_MAN);
+    if (dm && typeof dm === 'object') devManual = dm;
+    var u = readJson(LS_UI);
+    if (u && typeof u === 'object') { doneCollapsed = u.doneCollapsed || {}; devListCollapsed = !!u.devListCollapsed; sidebarPinned = !!u.sidebarPinned; THEME = (u.theme === 'dark') ? 'dark' : 'light'; SOUND = (u.sound !== false); }
+    var gg = readJson(LS_GRP);
+    if (Object.prototype.toString.call(gg) === '[object Array]') grpOrder = gg.filter(function (x) { return typeof x === 'string'; });
+    var us = readJson(LS_USED);
+    if (us) usedIds = normalizeUsedIds(us);
     // 补历史数据缺失的 k
     rows.forEach(function (r) { if (!r.k) r.k = 'r' + (++uid); else { var n = parseInt(String(r.k).slice(1), 10); if (n > uid) uid = n; } });
     // ⚠️ 见 migrateOldBatch()：老数据按导入日期回填一次 batch（负数）。补了就立刻存一次。
@@ -1675,6 +1711,9 @@
   }
   function importFiles(files) {
     var pending = files.length, added = 0, dup = 0;
+    // ⚠️ 2026-10-19 牛牛定调（已再次确认）：**导入去重是全局按「数据ID」的** ——
+    //    同一个人在 A 设备拉过（数据还在），B 设备再导就进不来；
+    //    只有「已归档」的名单才是按设备查（见下面 usedSet，因为归档删掉的行已经不在 rows 里了）。
     var existIds = {};
     var touched = {};                  // 本次新增的数据落在哪些设备上（用来决定导入后跳到哪）
     rows.forEach(function (r) { existIds[r.id] = true; });
@@ -1700,7 +1739,7 @@
         else parsed = parseHtmlTable(text);
         parsed.forEach(function (p) {
           if (existIds[p.id]) { dup++; return; }
-          // 该设备**归档过**的 ID 同样跳过（口径和上面的 existIds 一致：精确匹配）
+          // 该设备**归档过**的 ID 同样跳过（口径和上面的 existIds 一致：精确匹配、按设备查）
           if (usedSet[p.device] && usedSet[p.device][p.id]) { dup++; return; }
           existIds[p.id] = true;
           touched[p.device] = true;
@@ -3102,6 +3141,7 @@
     }
     else if (field === 'id') {
       if (!val || val === row.id) return;
+      // ⚠️ 2026-10-19：查重**全局按 ID**（和导入去重口径一致）—— 别的设备有同一个ID 也算冲突
       var dup = false;
       rows.forEach(function (x) { if (x !== row && x.id === val) dup = true; });
       if (dup) { toast('数据ID「' + val + '」已经有了，没改', null, 'block'); return; }
@@ -3958,6 +3998,16 @@
     if (devManual[old]) { delete devManual[old]; devManual[val] = true; }
     if (doneCollapsed[old] !== undefined) { doneCollapsed[val] = doneCollapsed[old]; delete doneCollapsed[old]; }
     rows.forEach(function (r) { if (r.device === old) r.device = val; });
+    // ⚠️⚠️ 2026-10-19 修：**归档去重名单也要跟着改到新设备名下**。
+    //   原来只改了 rows/deviceOrder，usedIds 还挂在旧名上 ——
+    //   改名后往新设备名导数据时查不到旧名单，已归档（界面上已删掉）的 ID 会被重新加回来，
+    //   等于重复拉群 / 重复交单。删除设备时是清掉的，只有改名漏了这一段。
+    if (usedIds[old]) {
+      var mergedUsed = usedIds[val] || [];
+      usedIds[old].forEach(function (x) { if (mergedUsed.indexOf(x) === -1) mergedUsed.push(x); });
+      usedIds[val] = mergedUsed;
+      delete usedIds[old];
+    }
     if (filterDevice === old) filterDevice = val;
     save(); render();
     toast('设备已改名为：' + val);
@@ -4322,6 +4372,8 @@
   applyTheme();               // ⚠️ 按 load() 读出来的 THEME 同步一次 <html data-theme>
                               //    （首屏那段内联脚本已经打过了，这里是"两边对齐"的保险）
   render();
+  // ⚠️ 数据读不出来（见 load()）→ 在这里提示：load() 执行时提示条的 DOM 还没准备好
+  if (LOAD_WARN) toast(LOAD_WARN, null, 'block');
   initSidebarRail();          // 侧栏 rail：悬停 / 键盘聚焦自动展开（2026-10-13 第三轮）
   // 名单库：先读本机缓存立刻可用（断网也行），云端再在后台比对版本号
   initRoster().then(function () {
