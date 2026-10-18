@@ -1941,12 +1941,11 @@
       body += '<p class="muted" style="margin-top:10px">本次不会触发归档。</p>';
     }
     // ⚠️ 2026-10-19 牛牛定调：保存框点「取消」→ **不能**算已完成。
-    //    能不能分辨"取消"取决于浏览器：Chrome/Edge 走 showSaveFilePicker（能分辨），
-    //    其它环境退回 <a download>（分辨不了）→ 两种情况的说法必须不一样，不能骗人。
-    body += CAN_SEE_CANCEL
+    //    能不能分辨"取消"取决于环境：Chrome/Edge 走 showSaveFilePicker（能分辨），
+    //    其它环境（含"还没成功用过一次"）退回 <a download>（分辨不了）→ 两种说法必须不一样，不能骗人。
+    body += canSeeCancel()
       ? '<p class="muted" style="margin-top:10px">在保存框点了<b>取消</b>的话，这些数据<b>不会</b>被标记，可以放心重导。</p>'
-      : '<p class="muted" style="margin-top:10px">⚠️ 这个浏览器拿不到保存框的「取消」信号 —— ' +
-        '点了「导出」就会标记为「已完成」。要退回：到「已完成」区勾上它们，点「恢复」。</p>';
+      : '<p class="muted" style="margin-top:10px">⚠️ 点了「导出」就会标记为「已完成」。要退回：到「已完成」区勾上它们，点「恢复」。</p>';
     openModal({
       title: '导出已拉群数据',
       bodyHtml: body,
@@ -2294,7 +2293,13 @@
   //    所以改用 File System Access 的 showSaveFilePicker —— 它返回 Promise，用户点取消时
   //    会 reject 一个 AbortError，只有真正写成功才 resolve。**这是唯一能分辨"取消"的官方途径。**
   //    不支持该 API 的浏览器（以及桌面版 Electron）→ 退回老办法（<a download>），行为不变。
+  //    ⚠️ 但"有这个 API"不等于"这个环境能用"（file:// 下 Chrome 可能直接抛 SecurityError）。
+  //       所以只有**真的通过它写成过一次**（PICKER_OK）才敢在确认框里承诺"取消不会被标记"。
   var CAN_SEE_CANCEL = (typeof window.showSaveFilePicker === 'function');
+  var LS_PICKER = 'fanhub_picker_v1';       // 只记一个 0/1：这个环境里 showSaveFilePicker 真的写成功过
+  var PICKER_OK = false;
+  try { PICKER_OK = localStorage.getItem(LS_PICKER) === '1'; } catch (e) {}
+  function canSeeCancel() { return CAN_SEE_CANCEL && PICKER_OK; }
   // 返回 Promise<true=已保存 / false=用户取消>
   function saveBlob(blob, fname) {
     if (!CAN_SEE_CANCEL) { downloadBlob(blob, fname); return Promise.resolve(true); }
@@ -2313,7 +2318,13 @@
     return p.then(function (handle) {
       return handle.createWritable().then(function (w) {
         return w.write(blob).then(function () { return w.close(); });
-      }).then(function () { return true; });
+      }).then(function () {
+        if (!PICKER_OK) {                     // 真写成功过一次 → 以后可以承诺"取消不标记"
+          PICKER_OK = true;
+          try { localStorage.setItem(LS_PICKER, '1'); } catch (e) {}
+        }
+        return true;
+      });
     }).catch(function (e) {
       var n = (e && e.name) || '';
       if (n === 'AbortError') return false;                       // ← 用户在保存框点了取消
