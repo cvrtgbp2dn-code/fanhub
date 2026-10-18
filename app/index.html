@@ -819,7 +819,7 @@
   //   纯本地单文件没法自己读到版本 → **只能写死在这里**，所以**每次发版必须手动同步这一行**。
   //   ⚠️ 漏改不会报错、只会显示旧版号 → 测试套件里有一条「APP_VER 必须等于 桌面版/app/version.json 的 version」
   //      专门盯它（见 测试_音效.js），别绕过。
-  var APP_VER = '2026.10.16.3';
+  var APP_VER = '2026.10.19.1';
   var LS_KEY = 'fanhub_rows_v2';
   var LS_DEV = 'fanhub_dev_order_v2';
   var LS_MAN = 'fanhub_dev_manual_v2';
@@ -1828,7 +1828,11 @@
   }
   function archiveDone() {
     var p = archivePlan();
-    if (!p.kill.length) return { n: 0, groups: [], kept: p.kept, total: p.total };
+    // ⚠️⚠️ 2026-10-19 修：**没有要归档的也必须 save()**。
+    //   原来这里直接 return，调用方（doExport）又以为"内部会 save"，
+    //   结果刚改的 status/doneAt 根本没落盘 —— 界面当场是「已完成」，一刷新/重开就整批退回「已拉群」。
+    //   而"某台设备已完成群组 ≤ 2 个"恰恰是**最常见**的情况，等于常态丢数据。
+    if (!p.kill.length) { save(); return { n: 0, groups: [], kept: p.kept, total: p.total }; }
     var killKeys = {};
     p.kill.forEach(function (r) {
       killKeys[r.k] = true;
@@ -1888,7 +1892,10 @@
     var t = Date.now();
     targets.forEach(function (r) { r.status = 'done'; r.doneAt = t; });
     selected = {};
-    var arc = archiveDone();          // ⚠️ 内部会 save()；归档后 rows 变了，下面统一 render
+    // ⚠️⚠️ 2026-10-19 修：改完状态**立刻落盘**，绝不能依赖 archiveDone 去顺带保存
+    //   （它没有可归档的行时会提前 return；那样导出看着成功、重开却全部回滚成「已拉群」）。
+    save();
+    var arc = archiveDone();          // 可能再移走一批更早的已完成（内部也会 save）；之后统一 render
     render();
     toast('已导出 ' + targets.length + ' 条「已拉群」数据，并全部标记为「已完成」' + arcNote(arc));
   }
