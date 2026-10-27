@@ -821,7 +821,7 @@
   //   纯本地单文件没法自己读到版本 → **只能写死在这里**，所以**每次发版必须手动同步这一行**。
   //   ⚠️ 漏改不会报错、只会显示旧版号 → 测试套件里有一条「APP_VER 必须等于 桌面版/app/version.json 的 version」
   //      专门盯它（见 测试_音效.js），别绕过。
-  var APP_VER = '2026.10.19.4';
+  var APP_VER = '2026.10.19.5';
   var LS_KEY = 'fanhub_rows_v2';
   var LS_DEV = 'fanhub_dev_order_v2';
   var LS_MAN = 'fanhub_dev_manual_v2';
@@ -2442,11 +2442,31 @@
   function sortByBatchDesc(list) {
     return list.slice().sort(function (a, b) { return (b.batch || 0) - (a.batch || 0); });
   }
+  // 「群组视图」的未完成区顺序 = **设备优先、批次次之**（2026-10-27 牛牛实拍到的 bug 修）。
+  //   ⚠️ 为什么单设备视图不能也用它：单设备里 `device` 全一样，这一层比较恒等，等价于 sortByBatchDesc ——
+  //      但没必要让单设备视图多绕一层，保持原样更安全（那是 2026-10-14 的定稿）。
+  //   ⚠️ 为什么**必须一个比较函数里两级排**，不能「先 sortByBatchDesc 再按设备 sort」：
+  //      后一次稳定排序只保证"同设备"的相对顺序，会把前一次排好的批次块打散 / 反之；
+  //      两次排必然互相覆盖。一次性比较才是对的。
+  //   ⚠️ 触发场景：群组视图 = 多台设备合成一张表，主键若是 batch（哪次导进来的），
+  //      设备就会被切成交错的几段（05 一批 → 08 一批 → 05 又一批），看着很乱。
+  //   ⚠️ 表格和「选中 N」仍需共用（见 typePoolInDisplayOrder），别只改一处。
+  function sortGroupRows(list) {
+    var idx = {};
+    deviceOrder.forEach(function (d, i) { idx[d] = i; });
+    return list.slice().sort(function (a, b) {
+      var ia = (a.device in idx) ? idx[a.device] : 1e9;   // 不在侧栏顺序表里的设备沉到最后
+      var ib = (b.device in idx) ? idx[b.device] : 1e9;
+      if (ia !== ib) return ia - ib;                      // ① 设备：一个设备一整块连续
+      return (b.batch || 0) - (a.batch || 0);             // ② 块内：最新的上传批次在上（同批保持原顺序）
+    });
+  }
   // 某个「数据类型」对应的候选池，**按它在表格里的实际显示顺序**排好。
-  //   · 未完成那几档 → 按上传批次倒序（和 tableCard 里那行用的是同一个函数）
+  //   · 未完成那几档 → 单设备视图 sortByBatchDesc / **群组视图 sortGroupRows**（和 tableCard 里那两行严格对应）
   //   · 'done' 档     → 走 sortDoneRows（和已完成折叠区里那行用的是同一个函数）
   function typePoolInDisplayOrder(v) {
-    return (v === 'done') ? sortDoneRows(typePool(v)) : sortByBatchDesc(typePool(v));
+    if (v === 'done') return sortDoneRows(typePool(v));
+    return groupScope ? sortGroupRows(typePool(v)) : sortByBatchDesc(typePool(v));
   }
   // 自下而上取最多 n 条（不足 n 则全取）。
   // ⚠️ 2026-10-14 定稿：**按表格的显示顺序，从最下面往上数 n 条** ——
@@ -3096,7 +3116,12 @@
     //    · ⚠️ 「选中 N」**必须用同一个 sortByBatchDesc**（见 typePoolInDisplayOrder）——
     //      不然显示一套顺序、选中另一套，勾出来会"中间空一片"
     //    · 已完成区**不按批次排**（它有自己的定稿：原顺序为主 + 同群名聚在一起，见 sortDoneRows）
-    var active = sortByBatchDesc(vis.filter(function (r) { return r.status !== 'done'; }));
+    //    ⚠️ 2026-10-27：**群组视图换成 sortGroupRows**（设备优先、批次次之）。
+    //       群组视图是多台设备合成一张表，若主键还是 batch，同一台设备会被切成交错的几段
+    //       （05 一批 → 08 一批 → 05 又一批）。单设备视图保持原样不动。
+    var active = isGrp
+      ? sortGroupRows(vis.filter(function (r) { return r.status !== 'done'; }))
+      : sortByBatchDesc(vis.filter(function (r) { return r.status !== 'done'; }));
     var done = sortDoneRows(vis.filter(function (r) { return r.status === 'done'; }));
     var collapsed = doneCollapsed[scopeKey] !== false;
     // 表头「全选」复选框的候选行 —— ⚠️ 必须走 cardPickable(scopeKey)（当前作用域内的可操作行）：
