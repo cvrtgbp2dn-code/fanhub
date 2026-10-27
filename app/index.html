@@ -176,10 +176,12 @@
   .dev-item .nm { flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
   .dev-item .cnt { font-size: 12px; color: var(--muted); background: var(--gray-bg); border-radius: 10px; padding: 1px 8px; flex-shrink: 0; position: relative; }
   .dev-item.active .cnt { background: var(--panel); color: var(--brand-d); }
-  /* 红点：该设备「有不在库 或 已分配」时的提醒（贴数字胶囊右上角，半悬在外）。
+  /* 红点：设备列表 = 「有不在库 或 已分配」；群组列表 = 「还有没标『已拉群』的人」（2026-10-27 加）。
+     同一个配方，贴着数字胶囊右上角、半悬在外。
      ⚠️ 必须绝对定位 —— 否则会把数字挤动车（用户对像素级跳动很敏感）。 */
-  .dev-item .cnt .dot { position: absolute; top: -2px; right: -3px; width: 6px; height: 6px; border-radius: 50%; background: var(--red); box-shadow: 0 0 0 1.5px var(--side); pointer-events: none; }
-  .dev-item:hover .cnt .dot, .dev-item.active .cnt .dot { box-shadow: 0 0 0 1.5px var(--hover); }
+  .dev-item .cnt .dot, .grp-item .cnt .dot { position: absolute; top: -2px; right: -3px; width: 6px; height: 6px; border-radius: 50%; background: var(--red); box-shadow: 0 0 0 1.5px var(--side); pointer-events: none; }
+  .dev-item:hover .cnt .dot, .dev-item.active .cnt .dot,
+  .grp-item:hover .cnt .dot, .grp-item.active .cnt .dot { box-shadow: 0 0 0 1.5px var(--hover); }
   /* 「设备列表」分组头：与底部「导入/导出/库管理」同一套线性图标语言。
      展开（激活）时图标变蓝，收起时灰色；右侧一个 ▾/▸ 表示可折叠。 */
   .side-title { display: flex; align-items: center; gap: 10px; width: 100%; border: none; background: none;
@@ -293,7 +295,7 @@
   .grp-item:hover svg, .grp-item.active svg { color: var(--brand); }
   .grp-item .nm { flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
   .grp-item .cnt { font-size: 12px; color: var(--muted); background: var(--gray-bg); border-radius: 10px;
-                   padding: 1px 8px; flex-shrink: 0; }
+                   padding: 1px 8px; flex-shrink: 0; position: relative; }   /* ⚠️ relative 是红点的定位基准，别删 */
   .grp-item.active .cnt { background: var(--panel); color: var(--brand-d); }
   /* 「已完成群组 (N)」：侧栏里的小折叠头（默认折叠，手动展开/收起），比主标题小一号、更弱化 */
   .grp-sub { display: flex; align-items: center; gap: 7px; width: 100%; border: none; background: none;
@@ -819,7 +821,7 @@
   //   纯本地单文件没法自己读到版本 → **只能写死在这里**，所以**每次发版必须手动同步这一行**。
   //   ⚠️ 漏改不会报错、只会显示旧版号 → 测试套件里有一条「APP_VER 必须等于 桌面版/app/version.json 的 version」
   //      专门盯它（见 测试_音效.js），别绕过。
-  var APP_VER = '2026.10.19.3';
+  var APP_VER = '2026.10.19.4';
   var LS_KEY = 'fanhub_rows_v2';
   var LS_DEV = 'fanhub_dev_order_v2';
   var LS_MAN = 'fanhub_dev_manual_v2';
@@ -1240,7 +1242,9 @@
     $('modalTitle').textContent = opt.title || '';
     var body = opt.bodyHtml || '';
     if (opt.input) {
-      body += '<input class="modal-input" id="modalInput" placeholder="' + esc(opt.input.placeholder || '') + '" value="' + esc(opt.input.value || '') + '">';
+      // data-grp=1 = 这是「群名称」输入框 → 粘贴时自动认群名（见 bindGrpPaste）
+      body += '<input class="modal-input" id="modalInput" placeholder="' + esc(opt.input.placeholder || '') + '" value="' + esc(opt.input.value || '') + '"' +
+        (opt.input.pasteGrp ? ' data-grp="1"' : '') + '>';
     }
     $('modalBody').innerHTML = body;
     var foot = '<button class="btn" data-modal="cancel">' + esc(opt.cancelText || '取消') + '</button>';
@@ -1255,7 +1259,12 @@
     //   ⚠️ 只认 okRed（红色主按钮），不是所有弹窗都响。导出确认框在有归档时也是 okRed → 同样会响，符合预期。
     if (opt.okRed) sfx('danger');
     var inp = $('modalInput');
-    if (inp) { inp.focus(); if (inp.select) { try { inp.select(); } catch (e) {} } }
+    if (inp) {
+      inp.focus(); if (inp.select) { try { inp.select(); } catch (e) {} }
+      // 群名称输入框：粘贴邀请文案时自动抠群名（2026-10-27）。⚠️ 只认带 data-grp 的，
+      //   改设备名 / 新增设备也用 #modalInput，别把它们一起改了。
+      if (opt.input && opt.input.pasteGrp) bindGrpPaste(inp);
+    }
   }
   function closeModal() { $('modalMask').classList.remove('show'); $('modalBody').removeAttribute('data-roster'); modalOkFn = null; modalHasOk = false; modalAllowEmpty = false; }
   // 注：data-roster 是弹窗版库管理留下的标记，现在只有这句清理、没人再设置它 —— 留着无害，不动了。
@@ -2917,30 +2926,39 @@
   //   · 点一项 → 主区把该群**所有设备**的数据合成**一张表**（牛牛：表头只有一个）
   //     ⚠️ 点它会**自动全选整群**（2026-10-13 第三轮改口；再点同一个群则什么都不变，见 setGroupScope）
   //   · 群组顺序 = **创建顺序**（第一次被填写的先后，见上方 grpOrderList()）
-  // 群名 → { total, undone, devs: {设备: 条数}, last }（跨设备聚合）
+  // 群名 → { total, undone, todo, devs: {设备: 条数}, last }（跨设备聚合）
   //   last = 该群里**最后一条完成**的时间戳（已完成行的 max doneAt）—— 只给侧栏「已完成群组」排序用。
   //   ⚠️ 取 **max** 而不是 min：和导出归档（archivePlanOf 里的 last）**同一口径**，两处不能各说各话。
   //   ⚠️ doneAt 是 2026-10-14 才加的字段 → 更早完成的老数据没有 → 当 0（= 最早，沉到最下面）。
+  //   todo = 该群里 **status==='pending'（已分配群名、还没点「设为已拉群」）** 的条数
+  //     → 侧栏群组行的小红点。2026-10-27 牛牛定的口径：
+  //       「拉了 10 个里的 5 个还没标已拉群」也要亮（= 这活没干完），所以数 pending 而不是数"整群有没有开始过"。
+  //     ⚠️ 只数 pending：launched 是"已经拉了、等着导出"，done 是交完单，都不该再提醒。
   function groupIndex() {
     var m = {};
     rows.forEach(function (r) {
       if (!r.group) return;
-      var g = m[r.group] || (m[r.group] = { total: 0, undone: 0, devs: {}, last: 0 });
+      var g = m[r.group] || (m[r.group] = { total: 0, undone: 0, todo: 0, devs: {}, last: 0 });
       g.total++;
       if (r.status !== 'done') g.undone++;
       else if ((r.doneAt || 0) > g.last) g.last = r.doneAt || 0;   // 只数已完成的行
+      if (r.status === 'pending') g.todo++;
       g.devs[r.device] = (g.devs[r.device] || 0) + 1;
     });
     return m;
   }
   // 侧栏一行群组：群名 + 总人数；悬停 title 看每台设备各几人（牛牛："只在悬停时用提示显示"）
+  // 红点（2026-10-27）：该群还有没标「已拉群」的人 → 总数胶囊右上角一个小红点（和设备列表同一个配方）。
+  //   ⚠️ 不显示数字：胶囊里已经有总数了，再塞一个数会挤（牛牛："红点只要一个点"）；具体剩几条放在悬停提示里。
+  //   ⚠️ 不用额外判断"是不是已完成群组" —— pending 一定导致 undone>0，这种群一定落在「进行中」那一段。
   function grpListItemHtml(g, m) {
     var tip = Object.keys(m[g].devs).map(function (d) { return d + ' ' + m[g].devs[d] + ' 条'; }).join('\n');
     var on = (mainView === 'data' && groupScope === g);
+    var todo = m[g].todo || 0;
     return '<div class="grp-item' + (on ? ' active' : '') + '" data-act="pickGrp" data-g="' + esc(g) + '"' +
-      ' title="' + esc(g + '\n' + tip + '\n点击查看这个群（所有设备）') + '">' +
+      ' title="' + esc(g + '\n' + tip + (todo ? '\n还有 ' + todo + ' 条没标「已拉群」' : '') + '\n点击查看这个群（所有设备）') + '">' +
       ICON.usersSm + '<span class="nm">' + esc(g) + '</span>' +
-      '<span class="cnt">' + m[g].total + '</span></div>';
+      '<span class="cnt">' + m[g].total + (todo ? '<i class="dot"></i>' : '') + '</span></div>';
   }
   // 侧栏「群组列表」整段。
   //   · 没有任何群名 → **整段返回空串**（侧栏布局纹丝不动）
@@ -3148,6 +3166,44 @@
   }
 
   // ---------- 双击编辑 ----------
+  // ---------- 从邀请文案里认群名（2026-10-27 牛牛要求）----------
+  // 背景：他拉群时是去快手复制一段邀请文案，粘贴进「群名称」后还得手动把群名抠出来，很烦。
+  // 例：我和1个人正在快手群聊【飞翔公园】里聊天，复制此消息##X9zMaQLrcExQ1Eu##，打开【快手App】即可加群。
+  //     → 要的是「飞翔公园」。
+  // ⚠️⚠️ 那段文字里有**两个**【】：【飞翔公园】和【快手App】。只取第一个"正好对"是运气，
+  //    所以先用「正在…群聊【X】」锚定（快手标准格式），认不出来再退化到"第一个非应用名的【】"。
+  // 返回 '' = 认不出来（调用方**必须**保持原文不动，别猜）。
+  function parseGrpName(text) {
+    if (!text) return '';
+    var s = String(text);
+    var tidy = function (v) { return String(v || '').replace(/\s+/g, ' ').trim(); };
+    // ① 快手：「…正在快手群聊【飞翔公园】里聊天…」（[^【]{0,10} = 中间最多夹几个字，别跨越到别的【】里）
+    var m = s.match(/正在[^【\n]{0,10}群聊【([^】\n]{1,40})】/);
+    if (m) return tidy(m[1]);
+    // ② 兜底：第一个【…】，但跳过「快手App / 抖音App / 微信」这类应用名
+    var re = /【([^】\n]{1,40})】/g, g;
+    while ((g = re.exec(s))) {
+      var cand = tidy(g[1]);
+      if (!cand) continue;
+      if (/^(快手|抖音|微信|QQ|小红书|微博|哔哩哔哩|b站)\s*(app|客户端)?$/i.test(cand)) continue;
+      return cand;
+    }
+    return '';
+  }
+  // 粘贴时自动认群名（两个入口共用：表格单元格 / 批量设群名弹窗）
+  // ⚠️ 必须先读到 clipboardData 再 preventDefault —— 反了就取不到原文。
+  // ⚠️ 认不出来时**什么都不做**（不 preventDefault、不改值），让他粘什么就是什么。
+  function bindGrpPaste(el) {
+    el.addEventListener('paste', function (ev) {
+      var cd = ev.clipboardData || window.clipboardData;
+      var t = cd && cd.getData('text');
+      var nm = parseGrpName(t);
+      if (!nm) return;
+      ev.preventDefault();
+      el.value = nm;
+      toast('已识别群名：' + nm);
+    });
+  }
   function startEdit(td) {
     if (td.classList.contains('editing')) return;
     var k = td.getAttribute('data-k'), field = td.getAttribute('data-field');
@@ -3186,6 +3242,8 @@
       else if (ev.key === 'Escape') { ev.preventDefault(); cancelEdit(td); }
     });
     el.addEventListener('blur', function () { commitEdit(td); });
+    // 群名称这一格：粘贴快手邀请文案 → 自动抠出群名（2026-10-27）
+    if (field === 'group') bindGrpPaste(el);
   }
   function cancelEdit(td) {
     if (!td.classList.contains('editing')) return;
@@ -3308,7 +3366,7 @@
       title: title || '设置群名称',
       bodyHtml: '给已勾选的 <b class="n">' + keys.length + '</b> 条数据填一个群名。' +
         '<div class="muted" style="margin-top:8px">填完它们就变成「已分配」。留空直接确定 = 清空群名，退回「未分配」。</div>',
-      input: { placeholder: '输入群名（留空 = 清空群名）' },
+      input: { placeholder: '输入群名（留空 = 清空群名）', pasteGrp: true },
       okText: '确定',
       allowEmpty: true,                 // ⚠️ 必须允许空输入 —— 「清空群名」就是靠空值走的
       onOk: function (v) {
